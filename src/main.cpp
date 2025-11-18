@@ -20,6 +20,10 @@
  * - Faz o máximo de medições possível durante a medição
  * - Ao finalizar (D32 desconectado), mostra estatísticas
  */
+#include <iostream>
+#include <string>
+#include <cstring>
+#include <vector>
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -46,6 +50,13 @@ bool lastTriggerState = true;
 unsigned long measurementStartTime = 0;
 unsigned long lastSerialUpdate = 0;
 unsigned long measurementCount = 0;
+unsigned long time_micros;
+
+char output_data[(sizeof(unsigned long) + sizeof(float)*3)];
+float output_floats[sizeof(float) * 3];
+
+#define POS_TIMESTAMP 0
+#define POS_MEASUREMENTS sizeof(unsigned long)
 
 // Variáveis para armazenar última medição
 float lastVoltage_mV = 0;
@@ -54,6 +65,7 @@ float lastPower_mW = 0;
 
 void setup() {
   // Inicializa Serial
+  Serial.setTxBufferSize(2048);
   Serial.begin(115200);
   delay(1000);
   
@@ -131,7 +143,7 @@ void loop() {
   if (lastTriggerState && !currentTriggerState) {
     Serial.println(">>> MEDIÇÃO INICIADA! GPIO 32 aterrado.");
     Serial.println(">>> Iniciando amostragem contínua...");
-    Serial.println();
+    Serial.println("start");
     
     isMeasuring = true;
     measurementStartTime = millis();
@@ -153,7 +165,8 @@ void loop() {
     if (measurementDuration > 0) {
       measurementsPerSecond = (measurementCount * 1000.0) / measurementDuration;
     }
-    
+    Serial.flush();
+    Serial.println("end");
     Serial.println();
     Serial.println("========================================");
     Serial.println(">>> MEDIÇÃO FINALIZADA!");
@@ -178,48 +191,27 @@ void loop() {
   // Se está medindo, faz leituras contínuas
   if (isMeasuring) {
     // Faz leitura (máxima velocidade possível)
+    
     float busVoltage = ina.getBusVoltage();      // Tensão da fonte (V)
     float shuntVoltage = ina.getShuntVoltage();   // Queda de tensão no shunt (V)
+    float current_mA = ina.getMilliAmpere();      // Corrente em mA
+
     float loadVoltage = busVoltage - shuntVoltage; // Tensão na carga (V)
     float voltage_mV = loadVoltage * 1000.0;      // Converte para mV
-    float current_mA = ina.getMilliAmpere();      // Corrente em mA
-    float power_mW = voltage_mV * current_mA / 1000.0; // Potência em mW
-    
-    // Armazena última medição
-    lastVoltage_mV = voltage_mV;
-    lastCurrent_mA = current_mA;
-    lastPower_mW = power_mW;
-    
+    float power_mW = loadVoltage * current_mA; // Potência em mW
+    output_floats[0] = voltage_mV;
+    output_floats[1] = current_mA;
+    output_floats[2] = power_mW;
+
+    time_micros = micros();
     // Incrementa contador
     measurementCount++;
-    
-    // Atualiza Serial a cada 0.5s
-    unsigned long currentTime = millis();
-    if (currentTime - lastSerialUpdate >= SERIAL_UPDATE_INTERVAL) {
-      Serial.print("Medição #");
-      Serial.print(measurementCount);
-      Serial.print(" | Tensão: ");
-      Serial.print(voltage_mV, 3);
-      Serial.print(" mV | Corrente: ");
-      Serial.print(current_mA, 3);
-      Serial.print(" mA | Potência: ");
-      Serial.print(power_mW, 3);
-      Serial.print(" mW");
-      
-      // Mostra taxa de amostragem atual
-      unsigned long elapsed = currentTime - measurementStartTime;
-      if (elapsed > 0) {
-        float currentRate = (measurementCount * 1000.0) / elapsed;
-        Serial.print(" | Taxa: ");
-        Serial.print(currentRate, 1);
-        Serial.print(" med/s");
-      }
-      
-      Serial.println();
-      lastSerialUpdate = currentTime;
-    }
+    memcpy(&output_data[POS_TIMESTAMP]   , &time_micros, sizeof(unsigned long));
+    memcpy(&output_data[POS_MEASUREMENTS], output_floats  , sizeof(float)*3);
+    Serial.write(output_data, 16);
+  
   } else {
     // Quando não está medindo, pequeno delay para não sobrecarregar CPU
-    delay(10);
+    delay(150);
   }
 }
