@@ -44,35 +44,17 @@
 // Instância do INA228
 INA228 ina(INA228_ADDRESS);
 
-// Variáveis para controle de medição
-bool isMeasuring = false;
 bool lastTriggerState = true;
-unsigned long measurementStartTime = 0;
-unsigned long lastSerialUpdate = 0;
-unsigned long measurementCount = 0;
-unsigned long time_micros;
-
-char output_data[(sizeof(unsigned long) + sizeof(float)*3)];
-float output_floats[sizeof(float) * 3];
-
-#define POS_TIMESTAMP 0
-#define POS_MEASUREMENTS sizeof(unsigned long)
-
-// Variáveis para armazenar última medição
-float lastVoltage_mV = 0;
-float lastCurrent_mA = 0;
-float lastPower_mW = 0;
 
 void setup() {
   // Inicializa Serial
-  Serial.setTxBufferSize(2048);
+  Serial.setTxBufferSize(1024*96);
   Serial.begin(115200);
   delay(1000);
   
-  Serial.println("========================================");
+  Serial.println("\n========================================================");
   Serial.println("Medidor de Energia INA228 - ESP32");
-  Serial.println("========================================");
-  Serial.println();
+  Serial.println("========================================================\n");
   
   // Configura LED como saída
   pinMode(LED_PIN, OUTPUT);
@@ -123,66 +105,51 @@ void setup() {
   // Configura ADCRange para resolução máxima
   ina.setADCRange(false);
   
-  Serial.println("INA228 configurado para máxima velocidade");
-  Serial.println();
+  Serial.println("INA228 configurado para máxima velocidade\n");
   Serial.println("Aguardando trigger no GPIO 32 (terra/0V) para iniciar medição...");
   Serial.print("Estado inicial do GPIO 32: ");
-  Serial.println(lastTriggerState ? "HIGH (desconectado)" : "LOW (em terra)");
-  Serial.println();
+  Serial.println(lastTriggerState ? "HIGH (desconectado)" : "LOW (em terra)\n");
+  Serial.println("finished_setup");
+  Serial.flush();
   
   // Aguarda conversões iniciais
   delay(500);
 }
 
+// Variáveis para controle de medição
+bool isMeasuring = false;
+bool currentTriggerState, triggerActive;
+unsigned int current_state = 0;
+float busVoltage, shuntVoltage, loadVoltage;
+
+typedef struct outputData {
+  unsigned long time;
+  float voltage_mV;
+  float current_mA;
+  float power_mW;
+} outputData;
+
+outputData output;
+
+#define POS_TIMESTAMP 0
+#define POS_MEASUREMENTS sizeof(unsigned long)
+
 void loop() {
   // Lê o estado atual do trigger
-  bool currentTriggerState = digitalRead(TRIGGER_PIN);
-  bool triggerActive = !currentTriggerState; // LOW = ativo (aterrado)
+  currentTriggerState = digitalRead(TRIGGER_PIN);
+  triggerActive = !currentTriggerState; // LOW = ativo (aterrado)
   
-  // Detecta início de medição (borda de descida: HIGH -> LOW)
+  // Detecta troca de estado de medição (borda de descida: HIGH -> LOW)
   if (lastTriggerState && !currentTriggerState) {
-    Serial.println(">>> MEDIÇÃO INICIADA! GPIO 32 aterrado.");
-    Serial.println(">>> Iniciando amostragem contínua...");
-    Serial.println("start");
-    
-    isMeasuring = true;
-    measurementStartTime = millis();
-    lastSerialUpdate = millis();
-    measurementCount = 0;
-    
-    // Acende LED para indicar medição
-    digitalWrite(LED_PIN, HIGH);
-  }
-  
-  // Detecta fim de medição (borda de subida: LOW -> HIGH)
-  if (!lastTriggerState && currentTriggerState) {
-    isMeasuring = false;
-    digitalWrite(LED_PIN, LOW);
-    
-    // Calcula estatísticas
-    unsigned long measurementDuration = millis() - measurementStartTime;
-    float measurementsPerSecond = 0;
-    if (measurementDuration > 0) {
-      measurementsPerSecond = (measurementCount * 1000.0) / measurementDuration;
+    Serial.write("state swap", 16);
+    current_state++;
+    isMeasuring = current_state < 4;
+    if (!isMeasuring) {
+      digitalWrite(LED_PIN, HIGH);
+    } else {
+      Serial.flush();
+      digitalWrite(LED_PIN, LOW);
     }
-    Serial.flush();
-    Serial.println("end");
-    Serial.println();
-    Serial.println("========================================");
-    Serial.println(">>> MEDIÇÃO FINALIZADA!");
-    Serial.println("========================================");
-    Serial.print("Total de medições: ");
-    Serial.println(measurementCount);
-    Serial.print("Tempo medido: ");
-    Serial.print(measurementDuration / 1000.0, 3);
-    Serial.println(" segundos");
-    Serial.print("Taxa de amostragem: ");
-    Serial.print(measurementsPerSecond, 2);
-    Serial.println(" medições/segundo");
-    Serial.println("========================================");
-    Serial.println();
-    Serial.println("Aguardando próximo trigger...");
-    Serial.println();
   }
   
   // Atualiza estado anterior
@@ -191,27 +158,21 @@ void loop() {
   // Se está medindo, faz leituras contínuas
   if (isMeasuring) {
     // Faz leitura (máxima velocidade possível)
+    output.time = micros();
+    busVoltage = ina.getBusVoltage();      // Tensão da fonte (V)
+    shuntVoltage = ina.getShuntVoltage();   // Queda de tensão no shunt (V)
+    output.current_mA = ina.getMilliAmpere();      // Corrente em mA
+
+    loadVoltage = busVoltage - shuntVoltage; // Tensão na carga (V)
+    output.voltage_mV = loadVoltage * 1000.0;       // Converte para mV
+    output.power_mW = loadVoltage * output.current_mA;     // Potência em mW
     
-    float busVoltage = ina.getBusVoltage();      // Tensão da fonte (V)
-    float shuntVoltage = ina.getShuntVoltage();   // Queda de tensão no shunt (V)
-    float current_mA = ina.getMilliAmpere();      // Corrente em mA
-
-    float loadVoltage = busVoltage - shuntVoltage; // Tensão na carga (V)
-    float voltage_mV = loadVoltage * 1000.0;      // Converte para mV
-    float power_mW = loadVoltage * current_mA; // Potência em mW
-    output_floats[0] = voltage_mV;
-    output_floats[1] = current_mA;
-    output_floats[2] = power_mW;
-
-    time_micros = micros();
-    // Incrementa contador
-    measurementCount++;
-    memcpy(&output_data[POS_TIMESTAMP]   , &time_micros, sizeof(unsigned long));
-    memcpy(&output_data[POS_MEASUREMENTS], output_floats  , sizeof(float)*3);
-    Serial.write(output_data, 16);
+    Serial.write((char*)&output, sizeof(outputData));
   
-  } else {
+  } else if (current_state == 0) {
     // Quando não está medindo, pequeno delay para não sobrecarregar CPU
-    delay(150);
+    delay(100);
+  } else {
+    delay(1000);
   }
 }
