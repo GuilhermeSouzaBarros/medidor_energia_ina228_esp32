@@ -1,7 +1,7 @@
 import serial
 import time
 
-SERIAL_PORT = '/dev/ttyACM2'
+SERIAL_PORT = '/dev/ttyACM0'
 BAUD_RATE = 115200
 
 from python_modules.states import StateWriter
