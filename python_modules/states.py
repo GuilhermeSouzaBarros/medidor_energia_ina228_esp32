@@ -1,9 +1,18 @@
+import struct
+from multiprocessing import Process, Queue, Event
+
 from datetime import date
 from pathlib import Path
-import struct
 
 class StateWriter:
-    def __init__(self, states:list[str], print_count:int=1024):
+    def __init__(self, serial, states:list[str], print_count:int=1024):
+        self.serial = serial
+        self.queue = Queue()
+        self.queue_should_read = Event()
+        self.queue_shutdown = Event()
+        self.queue_process = Process(target=self.read_to_queue)
+        self.queue_process.start()
+
         self.states = states
         self.num_states = len(self.states)
         self.cur = -1
@@ -21,6 +30,24 @@ class StateWriter:
         
     def __del__(self):
         if self.cur_file is not None: self.cur_file.close()
+        self.queue_shutdown.set()
+    
+    def read_to_queue(self):
+        print("\t Process -> read_to_queue : started")
+        while self.queue_should_read.wait() and not self.queue_shutdown.is_set():
+            while self.serial.in_waiting >= 16:
+                self.queue.put(self.serial.read(16))
+        print("\t Process -> read_to_queue : ended")
+
+    def write(self, string:str):
+        if self.cur_file is None: raise FileNotFoundError
+        self.cur_file.write(string)
+
+    def waiting(self):
+        return self.cur == -1
+
+    def ended(self):
+        return self.cur >= self.num_states
     
     @property
     def state_current(self):
@@ -41,30 +68,22 @@ class StateWriter:
         self.cur_file = open(path_file, "w")
         self.cur_file.write("timestamp,voltage,ampere,power\n")
 
-    def write(self, string:str):
-        if self.cur_file is None: raise FileNotFoundError
-        self.cur_file.write(string)
-
-    def waiting(self):
-        return self.cur == -1
-
-    def ended(self):
-        return self.cur >= self.num_states
-    
-    def read_setup(self, serial):
+    def read_setup(self):
         line = ""    
         while line != "finished_setup":
             try:
                 if line != "": print(line)
-                line = serial.readline().decode().rstrip()
-            except: continue 
+                line = self.serial.readline().decode().rstrip()
+            except: continue     
+        self.queue_should_read.set()
+        
 
-    def read_measurement(self, serial):
+    def read_measurement(self):
         measurement_count = 0
         time_first = None
         time_last = None
         while True:
-            data = serial.read(16)
+            data = self.queue.get()
             if b'state swap' in data: break
             if self.waiting(): continue
 

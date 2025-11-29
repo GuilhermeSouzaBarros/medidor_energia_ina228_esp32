@@ -20,6 +20,7 @@ def plot_graph():
 
     min_timestamp = None
     max_timestamp = None
+    min_measurement = None
     max_measurement = None
 
     last_timestamp = None
@@ -29,12 +30,19 @@ def plot_graph():
         data = pandas.read_csv(file_path)
         min_timestamp_cur = min(data["timestamp"])
         max_timestamp_cur = max(data["timestamp"])
+        
+        min_measurement_cur = min(data[measurement])
         max_measurement_cur = max(data[measurement])
+        
         if not min_timestamp or min_timestamp_cur < min_timestamp: min_timestamp = min_timestamp_cur
         if not max_timestamp or max_timestamp_cur > max_timestamp: max_timestamp = max_timestamp_cur
-        if not max_measurement or max_measurement_cur > max_measurement: max_measurement = max_measurement_cur
-        pyplot.plot(data["timestamp"], data[measurement], linestyle="solid")
 
+        if not min_measurement or min_measurement_cur < min_measurement: min_measurement = min_measurement_cur
+        if not max_measurement or max_measurement_cur > max_measurement: max_measurement = max_measurement_cur
+        
+        pyplot.plot(data["timestamp"], data[measurement], linestyle="solid")
+        pyplot.scatter(data["timestamp"], data[measurement], s=10)
+        
         for timestamp in data["timestamp"]:
             if last_timestamp: deltas.append(timestamp - last_timestamp)
             last_timestamp = timestamp
@@ -43,7 +51,7 @@ def plot_graph():
     pyplot.axis([
         min_timestamp * 0.9,
         max_timestamp * 1.05,
-        0,
+        min_measurement * 0.9,
         max_measurement * 1.05            
     ])    
     pyplot.show()

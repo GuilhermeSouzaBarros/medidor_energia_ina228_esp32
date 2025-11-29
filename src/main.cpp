@@ -46,9 +46,55 @@ INA228 ina(INA228_ADDRESS);
 
 bool lastTriggerState = true;
 
+typedef struct outputData {
+  unsigned long time;
+  float voltage_mV;
+  float current_mA;
+  float power_mW;
+} outputData;
+
+#define TX_BUFFER_SIZE 1024 * 4
+#define OUTPUT_DATA_SIZE TX_BUFFER_SIZE / 16
+
+typedef struct outputBuffer {
+  outputData data[OUTPUT_DATA_SIZE];
+} outputBuffer;
+
+outputBuffer output[2];
+bool output_can_write[2] = {1, 1};
+bool output_can_flush[2] = {0, 0};
+int   output_to_flush[2] = {0, 0};
+int output_next_flush = 0;
+
+bool task_writer_ready = 0;
+void taskWriter(void* parameter) {
+  Serial.println("\tTarefa taskWriter iniciada");
+  Serial.flush();
+  task_writer_ready = 1;
+  while(true) {
+    if (output_can_flush[output_next_flush]) {
+      Serial.write((char*)(
+        &output[output_next_flush]),
+        sizeof(outputData) * output_to_flush[output_next_flush]
+      );
+      Serial.flush();
+      // For Debugging with pio device monitor
+      //Serial.printf("\n\n\nFlushed buffer %d\n\n\n", output_next_flush);
+      //Serial.flush();
+      output_can_flush[output_next_flush] = 0;
+      output_to_flush[output_next_flush] = 0;
+      output_can_write[output_next_flush] = 1;
+      output_next_flush = !output_next_flush;
+    } //else {
+      //Serial.print("\n\n\n\tWaiting to flush...\n\n\n");
+    //}
+    vTaskDelay(1 / portTICK_PERIOD_MS);
+  }
+}
+
 void setup() {
   // Inicializa Serial
-  Serial.setTxBufferSize(1024*96);
+  Serial.setTxBufferSize(TX_BUFFER_SIZE);
   Serial.begin(115200);
   delay(1000);
   
@@ -108,7 +154,21 @@ void setup() {
   Serial.println("INA228 configurado para máxima velocidade\n");
   Serial.println("Aguardando trigger no GPIO 32 (terra/0V) para iniciar medição...");
   Serial.print("Estado inicial do GPIO 32: ");
-  Serial.println(lastTriggerState ? "HIGH (desconectado)" : "LOW (em terra)\n");
+  Serial.println(lastTriggerState ? "HIGH (desconectado)" : "LOW (em terra)\n\n");
+  
+  Serial.println("\tIniciando taskWriter...");
+  xTaskCreatePinnedToCore(
+    taskWriter,
+    "Task Writer",
+    TX_BUFFER_SIZE*4,
+    NULL,
+    1,
+    NULL,
+    0
+  );
+  while (!task_writer_ready) delay(1);
+
+  Serial.println("Setup terminou com sucesso.\n\n");
   Serial.println("finished_setup");
   Serial.flush();
   
@@ -122,33 +182,51 @@ bool currentTriggerState, triggerActive;
 unsigned int current_state = 0;
 float busVoltage, shuntVoltage, loadVoltage;
 
-typedef struct outputData {
-  unsigned long time;
-  float voltage_mV;
-  float current_mA;
-  float power_mW;
-} outputData;
-
-outputData output;
-
 #define POS_TIMESTAMP 0
 #define POS_MEASUREMENTS sizeof(unsigned long)
 
+int output_buffer_index = 0;
+int output_buffer_data_index = 0;
+
+void ouput_buffer_increment() {
+  output_buffer_data_index++;
+  output_to_flush[output_buffer_index]++;
+  if (output_buffer_data_index < OUTPUT_DATA_SIZE) return;
+  output_buffer_data_index = 0;
+  output_can_write[output_buffer_index] = 0;
+  output_can_flush[output_buffer_index] = 1;
+  output_buffer_index = !output_buffer_index;
+  while (!output_can_write[output_buffer_index]) {
+    //Serial.print("\n\n\n\tWaiting to write...\n\n\n");
+    delayMicroseconds(5);
+  }
+}
+
 void loop() {
+  if (!isMeasuring && current_state) {
+    delay(1000);
+    return;
+  }
+
   // Lê o estado atual do trigger
   currentTriggerState = digitalRead(TRIGGER_PIN);
   triggerActive = !currentTriggerState; // LOW = ativo (aterrado)
   
   // Detecta troca de estado de medição (borda de descida: HIGH -> LOW)
   if (lastTriggerState && !currentTriggerState) {
-    Serial.write("state swap", 16);
+    memcpy(
+      &(output[output_buffer_index].data[output_buffer_data_index]),
+      "state swap\0\0\0\0\0", 16
+    );
+    ouput_buffer_increment();
+
     current_state++;
     isMeasuring = current_state < 4;
-    if (!isMeasuring) {
-      digitalWrite(LED_PIN, HIGH);
-    } else {
-      Serial.flush();
+    if (isMeasuring) {
       digitalWrite(LED_PIN, LOW);
+    } else {
+      output_can_flush[output_buffer_index] = 1;
+      digitalWrite(LED_PIN, HIGH);
     }
   }
   
@@ -158,21 +236,21 @@ void loop() {
   // Se está medindo, faz leituras contínuas
   if (isMeasuring) {
     // Faz leitura (máxima velocidade possível)
-    output.time = micros();
+    outputData* output_current = &(output[output_buffer_index].data[output_buffer_data_index]);
+    output_current->time = micros();
     busVoltage = ina.getBusVoltage();      // Tensão da fonte (V)
     shuntVoltage = ina.getShuntVoltage();   // Queda de tensão no shunt (V)
-    output.current_mA = ina.getMilliAmpere();      // Corrente em mA
+    output_current->current_mA = ina.getMilliAmpere();      // Corrente em mA
 
     loadVoltage = busVoltage - shuntVoltage; // Tensão na carga (V)
-    output.voltage_mV = loadVoltage * 1000.0;       // Converte para mV
-    output.power_mW = loadVoltage * output.current_mA;     // Potência em mW
+    output_current->voltage_mV = loadVoltage * 1000.0;       // Converte para mV
+    output_current->power_mW = loadVoltage * output_current->current_mA;     // Potência em mW
     
-    Serial.write((char*)&output, sizeof(outputData));
-  
-  } else if (current_state == 0) {
+    ouput_buffer_increment();
+    delayMicroseconds(800);
+
+  } else {
     // Quando não está medindo, pequeno delay para não sobrecarregar CPU
     delay(100);
-  } else {
-    delay(1000);
   }
 }
