@@ -1,3 +1,4 @@
+
 import struct
 from multiprocessing import Process, Queue, Event
 
@@ -35,8 +36,8 @@ class StateWriter:
     def read_to_queue(self):
         print("\t Process -> read_to_queue : started")
         while self.queue_should_read.wait() and not self.queue_shutdown.is_set():
-            while self.serial.in_waiting >= 16:
-                self.queue.put(self.serial.read(16))
+            while self.serial.in_waiting >= 14:
+                self.queue.put(self.serial.read(14))
         print("\t Process -> read_to_queue : ended")
 
     def write(self, string:str):
@@ -88,8 +89,9 @@ class StateWriter:
             if self.waiting(): continue
 
             try:
-                data = struct.unpack('Ifff', data)
-                line_to_write = f"{data[0]},{data[1]},{data[2]},{data[3]}\n"
+                data = struct.unpack('IHH', data) # I: unsigned long | H: unsigned short
+                data = (data[0], data[1]/(1024*1024), data[2]/(1024*1024))
+                line_to_write = f"{data[0]},{data[1]},{data[2]},{data[1]*data[2]}\n"
                 if time_first is None: time_first = data[0]
                 time_last = data[0]
                 measurement_count += 1

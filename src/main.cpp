@@ -46,15 +46,17 @@ INA228 ina(INA228_ADDRESS);
 
 bool lastTriggerState = true;
 
+// Diretiva de compilacao para que o tamanho das struct seja a soma das suas partes
+#pragma pack(push, 1)
 typedef struct outputData {
   unsigned long time;
-  float voltage_mV;
-  float current_mA;
-  float power_mW;
+  u_short voltage_mV;
+  u_short current_mA;
 } outputData;
+#pragma pack(pop)
 
 #define TX_BUFFER_SIZE 1024 * 4
-#define OUTPUT_DATA_SIZE TX_BUFFER_SIZE / 16
+#define OUTPUT_DATA_SIZE TX_BUFFER_SIZE / sizeof(outputData)
 
 typedef struct outputBuffer {
   outputData data[OUTPUT_DATA_SIZE];
@@ -192,6 +194,7 @@ void ouput_buffer_increment() {
   output_buffer_data_index++;
   output_to_flush[output_buffer_index]++;
   if (output_buffer_data_index < OUTPUT_DATA_SIZE) return;
+
   output_buffer_data_index = 0;
   output_can_write[output_buffer_index] = 0;
   output_can_flush[output_buffer_index] = 1;
@@ -238,16 +241,13 @@ void loop() {
     // Faz leitura (máxima velocidade possível)
     outputData* output_current = &(output[output_buffer_index].data[output_buffer_data_index]);
     output_current->time = micros();
-    busVoltage = ina.getBusVoltage();      // Tensão da fonte (V)
-    shuntVoltage = ina.getShuntVoltage();   // Queda de tensão no shunt (V)
-    output_current->current_mA = ina.getMilliAmpere();      // Corrente em mA
+    busVoltage = ina.getBusVoltage();                         // Tensão da fonte (V)
+    shuntVoltage = ina.getShuntVoltage();                     // Queda de tensão no shunt (V)
+    output_current->current_mA = ina.getMilliAmpere();        // Corrente em mA
 
-    loadVoltage = busVoltage - shuntVoltage; // Tensão na carga (V)
-    output_current->voltage_mV = loadVoltage * 1000.0;       // Converte para mV
-    output_current->power_mW = loadVoltage * output_current->current_mA;     // Potência em mW
-    
+    loadVoltage = busVoltage - shuntVoltage;                  // Tensão na carga (V)
+    output_current->voltage_mV = loadVoltage * (1024 * 1024); // Converte para unsigned short
     ouput_buffer_increment();
-    delayMicroseconds(800);
 
   } else {
     // Quando não está medindo, pequeno delay para não sobrecarregar CPU
