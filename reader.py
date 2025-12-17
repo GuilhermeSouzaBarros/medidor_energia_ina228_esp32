@@ -6,7 +6,7 @@ BAUD_RATE = 115200
 
 from python_modules.states import StateWriter
 
-states = ["preinferencia", "inferencia", "posinferencia"]
+states = ["medicao"]
 
 def read_from_esp32():
     writer = StateWriter(states, 128)

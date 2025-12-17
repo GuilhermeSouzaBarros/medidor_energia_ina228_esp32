@@ -64,7 +64,7 @@ class StateWriter:
         time_first = None
         time_last = None
         while True:
-            data = serial.read(16)
+            data = serial.read(20)
             if b'state swap' in data: break
             if self.waiting(): continue
 

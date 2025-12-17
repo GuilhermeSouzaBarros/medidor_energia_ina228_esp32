@@ -48,7 +48,7 @@ bool lastTriggerState = true;
 
 void setup() {
   // Inicializa Serial
-  Serial.setTxBufferSize(1024*96);
+  Serial.setTxBufferSize(1024);
   Serial.begin(115200);
   delay(1000);
   
@@ -122,12 +122,14 @@ bool currentTriggerState, triggerActive;
 unsigned int current_state = 0;
 float busVoltage, shuntVoltage, loadVoltage;
 
+#pragma pack(push, 1)
 typedef struct outputData {
   unsigned long time;
   float voltage_mV;
   float current_mA;
   float power_mW;
 } outputData;
+#pragma pack(pop)
 
 outputData output;
 
@@ -136,15 +138,19 @@ outputData output;
 
 void loop() {
   // Lê o estado atual do trigger
+  if (current_state >= 2) {
+    delay(1000);
+    return;
+  }
+
   currentTriggerState = digitalRead(TRIGGER_PIN);
   triggerActive = !currentTriggerState; // LOW = ativo (aterrado)
   
   // Detecta troca de estado de medição (borda de descida: HIGH -> LOW)
   if (lastTriggerState && !currentTriggerState) {
-    Serial.write("state swap", 16);
+    Serial.write("state swap", 20);
     current_state++;
-    isMeasuring = current_state < 4;
-    if (!isMeasuring) {
+    if (current_state == 1) {
       digitalWrite(LED_PIN, HIGH);
     } else {
       Serial.flush();
@@ -152,12 +158,11 @@ void loop() {
     }
   }
   
+  
   // Atualiza estado anterior
   lastTriggerState = currentTriggerState;
-  
-  // Se está medindo, faz leituras contínuas
-  if (isMeasuring) {
-    // Faz leitura (máxima velocidade possível)
+  if (current_state == 1) {
+    // Se está medindo, faz leituras contínuas (máxima velocidade possível)
     output.time = micros();
     busVoltage = ina.getBusVoltage();      // Tensão da fonte (V)
     shuntVoltage = ina.getShuntVoltage();   // Queda de tensão no shunt (V)
@@ -168,11 +173,12 @@ void loop() {
     output.power_mW = loadVoltage * output.current_mA;     // Potência em mW
     
     Serial.write((char*)&output, sizeof(outputData));
+    Serial.flush();
+  
   
   } else if (current_state == 0) {
-    // Quando não está medindo, pequeno delay para não sobrecarregar CPU
+    // Quando está esperando a medição,
+    // pequeno delay para não sobrecarregar CPU
     delay(100);
-  } else {
-    delay(1000);
   }
 }
